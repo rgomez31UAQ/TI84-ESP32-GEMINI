@@ -137,6 +137,42 @@ build_flags = -D SERVER=\"https://tu-app.onrender.com\" -D SECURE
 
 `server/Dockerfile` y `server/.dockerignore` estan incluidos para despliegue en cualquier proveedor con contenedores.
 
+## Opcion sin tarjeta: Raspberry Pi Zero 2 W
+
+Si Render te pide tarjeta, puedes correr el backend en una Raspberry Pi Zero 2 W.
+
+Resumen rapido:
+
+1. Instala `Raspberry Pi OS Lite 64-bit`.
+1. En la Pi, ejecuta:
+
+```bash
+git clone https://github.com/rgomez31UAQ/TI84-ESP32-GEMINI.git
+cd TI84-ESP32-GEMINI
+sudo bash scripts/pi/setup_pi_backend.sh
+```
+
+1. Edita `/etc/ti84-backend.env` con tus keys.
+1. Verifica backend:
+
+```bash
+curl -sS http://127.0.0.1:8080/healthz
+```
+
+1. En el portal AP `calc` del ESP32, pon `Backend URL` a:
+1. `http://ti84pi.local:8080` o la IP local de la Pi.
+
+Guia completa:
+
+- `docs/RPI_ZERO2W_SETUP.md`
+
+Scripts incluidos:
+
+- `scripts/pi/setup_pi_backend.sh`
+- `scripts/pi/update_pi_backend.sh`
+- `scripts/pi/install_tailscale.sh`
+- `scripts/pi/ti84-backend.service`
+
 ## Publicar en GitHub (manual)
 
 Repositorio remoto configurado:

@@ -208,6 +208,7 @@ void avg_value();
 void math_solver();
 void beginEnterprise(const char* ssid, const char* user, const char* pass);
 void _sendLauncher();
+int makeRequest(String url, char* result, int resultLen, size_t* len);
 
 struct Command {
   int id;
@@ -461,12 +462,32 @@ const char* successHTML = R"rawliteral(
 </head>
 <body>
     <div class="box">
-        <h1>Connected!</h1>
-        <p>WiFi credentials saved. You can close this page.</p>
+        <h1>{{SETUP_TITLE}}</h1>
+        <p>{{SETUP_STATUS}}</p>
+        <p>Backend: {{SERVER_URL}}</p>
+        <p>You can close this page.</p>
     </div>
 </body>
 </html>
 )rawliteral";
+
+bool checkBackendHealth() {
+  if (!WiFi.isConnected()) {
+    return false;
+  }
+
+  char healthResponse[256];
+  memset(healthResponse, 0, sizeof(healthResponse));
+  size_t responseLen = 0;
+
+  String url = getServerBase() + "/healthz";
+  int reqStatus = makeRequest(url, healthResponse, sizeof(healthResponse), &responseLen);
+  if (reqStatus != 0) {
+    return false;
+  }
+
+  return strstr(healthResponse, "\"ok\":true") != NULL;
+}
 
 void handleRoot() {
   String page = String(portalHTML);
@@ -495,17 +516,58 @@ void handleSave() {
   out.println("SSID: " + storedSSID);
   out.println("SERVER: " + storedServerUrl);
 
-  webServer.send(200, "text/html", successHTML);
+  bool connectedNow = false;
+  bool backendOk = false;
+
+  if (storedEapUser.length() > 0) {
+    out.println("Connecting via WPA2-Enterprise");
+    beginEnterprise(storedSSID.c_str(), storedEapUser.c_str(), storedPass.c_str());
+  } else {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(storedSSID.c_str(), storedPass.c_str());
+  }
+
+  int maxAttempts = (storedEapUser.length() > 0) ? 60 : 20;
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < maxAttempts) {
+    delay(500);
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    connectedNow = true;
+    out.print("Portal connect IP: ");
+    out.println(WiFi.localIP());
+    backendOk = checkBackendHealth();
+  }
+
+  String page = String(successHTML);
+  page.replace("{{SERVER_URL}}", storedServerUrl);
+  if (connectedNow && backendOk) {
+    page.replace("{{SETUP_TITLE}}", "Connected!");
+    page.replace("{{SETUP_STATUS}}", "WiFi and backend are ready.");
+  } else if (connectedNow) {
+    page.replace("{{SETUP_TITLE}}", "WiFi Connected");
+    page.replace("{{SETUP_STATUS}}", "Backend check failed. Verify URL or cloud service status.");
+  } else {
+    page.replace("{{SETUP_TITLE}}", "Saved, but not connected");
+    page.replace("{{SETUP_STATUS}}", "Could not join WiFi now. Check credentials and retry.");
+  }
+
+  webServer.send(200, "text/html", page);
 
   delay(2000);
   portalActive = false;
 
   WiFi.softAPdisconnect(true);
-  if (storedEapUser.length() > 0) {
-    out.println("Connecting via WPA2-Enterprise");
-    beginEnterprise(storedSSID.c_str(), storedEapUser.c_str(), storedPass.c_str());
-  } else {
-    WiFi.begin(storedSSID.c_str(), storedPass.c_str());
+
+  // If initial connect failed, keep trying in background after portal closes.
+  if (!connectedNow) {
+    if (storedEapUser.length() > 0) {
+      beginEnterprise(storedSSID.c_str(), storedEapUser.c_str(), storedPass.c_str());
+    } else {
+      WiFi.begin(storedSSID.c_str(), storedPass.c_str());
+    }
   }
 }
 
@@ -1072,7 +1134,7 @@ void gpt() {
   out.print("prompt: ");
   out.println(prompt);
 
-  auto url = getServerBase() + String("/gpt/ask?question=") + urlEncode(String(prompt));
+  auto url = String(SERVER) + String("/gpt/ask?question=") + urlEncode(String(prompt));
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1088,7 +1150,7 @@ void gpt() {
 
 void gpt_chat() {
   const char* prompt = strArgs[0];
-  String url = getServerBase() + "/gpt/ask?question=" + urlEncode(String(prompt)) + "&sid=" + urlEncode(String(sessionId));
+  String url = String(SERVER) + "/gpt/ask?question=" + urlEncode(String(prompt)) + "&sid=" + urlEncode(String(sessionId));
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1114,7 +1176,7 @@ void gpt_history() {
     setError("NO SESSION");
     return;
   }
-  String url = getServerBase() + "/gpt/history?sid=" + urlEncode(String(sessionId)) + "&p=" + String(page);
+  String url = String(SERVER) + "/gpt/history?sid=" + urlEncode(String(sessionId)) + "&p=" + String(page);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1135,7 +1197,7 @@ void derivative() {
   out.println(expr);
 
   String prompt = "Find the derivative of f(x) = " + String(expr) + ". Compute it step by step then give ONLY the simplified result.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1155,7 +1217,7 @@ void integrate() {
   out.println(expr);
 
   String prompt = "Find the indefinite integral of f(x) = " + String(expr) + ". Compute it then give ONLY the result with +C.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1175,7 +1237,7 @@ void elastic() {
   out.println(values);
 
   String prompt = "Solve elastic collision: m1,v1,m2,v2 = " + String(values) + ". Use conservation of momentum and kinetic energy. Give ONLY the final velocities V1F and V2F as numbers.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1192,7 +1254,7 @@ void inelastic() {
   out.println(values);
 
   String prompt = "Solve perfectly inelastic collision: m1,v1,m2,v2 = " + String(values) + ". Use (m1*v1 + m2*v2)/(m1+m2). Give ONLY: VF = (number).";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1209,7 +1271,7 @@ void series() {
   out.println(expr);
 
   String prompt = "Does the infinite series sum from n=1 to infinity of " + String(expr) + " converge or diverge? State CONVERGES or DIVERGES, which test, and the sum if known. Brief.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1226,7 +1288,7 @@ void double_integral() {
   out.println(expr);
 
   String prompt = "Evaluate the double integral: " + String(expr) + ". Compute step by step, give ONLY the final number.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1243,7 +1305,7 @@ void avg_value() {
   out.println(expr);
 
   String prompt = "Calculate the average value of a function: " + String(expr) + ". Use the formula: avg = (1/Area) * integral from xlow to xhigh of integral from ylow to yhigh of f(x,y) dy dx, where Area = (xhigh-xlow)*(yhigh-ylow). Show the setup: INTEGRAND: (show the fraction 1/Area * f(x,y)), AREA: (show the value), then compute the double integral step by step and give the FINAL ANSWER as a number or fraction.";
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1260,7 +1322,7 @@ void math_solver() {
   out.println(problem);
 
   String prompt = "Solve this math problem. Show ONLY the final answer, no steps. Problem: " + String(problem);
-  auto url = getServerBase() + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?math=1&question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1276,7 +1338,7 @@ void get_version() {
 }
 
 void get_newest() {
-  String versionUrl = getServerBase() + "/firmware/version";
+  String versionUrl = String(SERVER) + "/firmware/version";
   size_t realsize = 0;
   if (makeRequest(versionUrl, response, MAXHTTPRESPONSELEN, &realsize)) {
     setError("CHECK FAILED");
@@ -1291,7 +1353,7 @@ void weather() {
   out.println(city);
 
   String prompt = "Current weather in " + String(city) + "? Give temp in F and C, conditions. Very brief, max 50 words.";
-  auto url = getServerBase() + String("/gpt/ask?question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1309,7 +1371,7 @@ void translate() {
 
   // Format: "LANG:text" e.g. "SPANISH:hello" or just "text" for auto-detect to English
   String prompt = "Translate this: " + String(text) + ". Give only the translation, nothing else.";
-  auto url = getServerBase() + String("/gpt/ask?question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1326,7 +1388,7 @@ void define() {
   out.println(word);
 
   String prompt = "Define '" + String(word) + "' in one brief sentence.";
-  auto url = getServerBase() + String("/gpt/ask?question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1343,7 +1405,7 @@ void units() {
   out.println(conversion);
 
   String prompt = "Convert: " + String(conversion) + ". Give only the result with units.";
-  auto url = getServerBase() + String("/gpt/ask?question=") + urlEncode(prompt);
+  auto url = String(SERVER) + String("/gpt/ask?question=") + urlEncode(prompt);
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1548,7 +1610,7 @@ void _resetProgram() {
 
 void _otaFlashAndReboot() {
   out.println("Downloading + flashing firmware...");
-  String firmwareUrl = getServerBase() + "/firmware/download";
+  String firmwareUrl = String(SERVER) + "/firmware/download";
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -1587,7 +1649,7 @@ void ota_update() {
   out.println(FIRMWARE_VERSION);
 
   // Check for new version
-  String versionUrl = getServerBase() + "/firmware/version";
+  String versionUrl = String(SERVER) + "/firmware/version";
   size_t realsize = 0;
   if (makeRequest(versionUrl, response, MAXHTTPRESPONSELEN, &realsize)) {
     setError("CHECK FAILED");
@@ -1652,7 +1714,7 @@ void solve() {
 
 void image_list() {
   int page = realArgs[0];
-  auto url = getServerBase() + String("/image/list?p=") + urlEncode(String(page));
+  auto url = String(SERVER) + String("/image/list?p=") + urlEncode(String(page));
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXSTRARGLEN, &realsize)) {
@@ -1673,7 +1735,7 @@ void fetch_image() {
   out.print("id: ");
   out.println(id);
 
-  auto url = getServerBase() + String("/image/get?id=") + urlEncode(String(id));
+  auto url = String(SERVER) + String("/image/get?id=") + urlEncode(String(id));
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
@@ -1698,7 +1760,7 @@ void fetch_image() {
 
 void program_list() {
   int page = realArgs[0];
-  auto url = getServerBase() + String("/programs/list?p=") + urlEncode(String(page));
+  auto url = String(SERVER) + String("/programs/list?p=") + urlEncode(String(page));
 
   size_t realsize = 0;
   if (makeRequest(url, response, MAXSTRARGLEN, &realsize)) {
@@ -1731,7 +1793,7 @@ void fetch_program() {
 
   _resetProgram();
 
-  auto url = getServerBase() + String("/programs/get?id=") + urlEncode(String(id));
+  auto url = String(SERVER) + String("/programs/get?id=") + urlEncode(String(id));
 
   if (makeRequest(url, programData, 4096, &programLength)) {
     setError("error making request for program data");
@@ -1739,7 +1801,7 @@ void fetch_program() {
   }
 
   size_t realsize = 0;
-  auto nameUrl = getServerBase() + String("/programs/get_name?id=") + urlEncode(String(id));
+  auto nameUrl = String(SERVER) + String("/programs/get_name?id=") + urlEncode(String(id));
   if (makeRequest(nameUrl, programName, 256, &realsize)) {
     setError("error making request for program name");
     return;

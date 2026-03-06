@@ -1,0 +1,19 @@
+[Unit]
+Description=TI84 ESP32 Multi-AI Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/TI84-ESP32-GEMINI/server
+EnvironmentFile=/etc/ti84-backend.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
