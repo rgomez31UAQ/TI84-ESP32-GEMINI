@@ -19,10 +19,11 @@
 #include "esp_sleep.h"
 #include "esp_wifi.h"
 #include "esp_wpa2.h"
+#include "driver/gpio.h"
 
 // Override SERVER from PlatformIO build flags if needed.
 #ifndef SERVER
-#define SERVER "http://192.168.1.100:8080"
+#define SERVER "http://ti84pi.local:8080"
 #endif
 
 // Enable SECURE when SERVER uses HTTPS.
@@ -99,6 +100,26 @@ String getServerBase() {
     return String(SERVER);
   }
   return storedServerUrl;
+}
+
+String jsonEscape(const String& value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    char c = value.charAt(i);
+    if (c == '\\') {
+      escaped += "\\\\";
+    } else if (c == '"') {
+      escaped += "\\\"";
+    } else if (c == '\n') {
+      escaped += "\\n";
+    } else if (c == '\r') {
+      escaped += "\\r";
+    } else {
+      escaped += c;
+    }
+  }
+  return escaped;
 }
 
 // #define CAMERA
@@ -207,8 +228,11 @@ void get_ip();
 void avg_value();
 void math_solver();
 void beginEnterprise(const char* ssid, const char* user, const char* pass);
+void processSerialConsole();
+void handleSerialCommand(const String& cmdLine);
 void _sendLauncher();
 int makeRequest(String url, char* result, int resultLen, size_t* len);
+int postBinaryRequest(String url, const uint8_t* payload, size_t payloadLen, const char* contentType, char* result, int resultLen, size_t* len);
 
 struct Command {
   int id;
@@ -390,8 +414,12 @@ const char* portalHTML = R"rawliteral(
         .logo img { width: 64px; height: 64px; border-radius: 50%; }
         label { display: block; margin-bottom: 6px; font-weight: 600; color: #333; font-size: 14px; }
         input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; margin-bottom: 16px; }
+        select { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; margin-bottom: 16px; background: white; }
         input:focus { outline: none; border-color: #4a6cf7; }
+        select:focus { outline: none; border-color: #4a6cf7; }
         button { width: 100%; padding: 16px; background: linear-gradient(135deg, #4a6cf7 0%, #6366f1 100%); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .btn-secondary { margin-bottom: 12px; padding: 12px; font-size: 14px; background: #eef2ff; color: #243b8a; border: 1px solid #c7d2fe; }
+        .scan-status { margin-top: -8px; margin-bottom: 16px; color: #555; font-size: 13px; min-height: 18px; }
         .tabs { display: flex; margin-bottom: 24px; border-bottom: 2px solid #e0e0e0; }
         .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; font-weight: 600; color: #999; border-bottom: 2px solid transparent; margin-bottom: -2px; }
         .tab.active { color: #4a6cf7; border-bottom-color: #4a6cf7; }
@@ -410,8 +438,14 @@ const char* portalHTML = R"rawliteral(
             <div class="tab" onclick="switchTab('eduroam')">Eduroam</div>
         </div>
         <form id="wifi-form" class="form active" action="/save" method="POST">
+          <button type="button" class="btn-secondary" onclick="scanNetworks()">Scan Nearby WiFi</button>
+          <label>Nearby Networks</label>
+          <select id="network-select" onchange="selectNetwork(this.value)">
+            <option value="">Select a network (optional)</option>
+          </select>
+          <div id="scan-status" class="scan-status"></div>
             <label>WiFi Network Name</label>
-            <input type="text" name="ssid" placeholder="Enter your WiFi SSID" required>
+          <input id="ssid-input" type="text" name="ssid" placeholder="Enter your WiFi SSID" required>
             <label>WiFi Password</label>
             <input type="password" name="password" placeholder="Enter your WiFi password">
           <label>Backend URL (Render/Railway)</label>
@@ -443,6 +477,40 @@ const char* portalHTML = R"rawliteral(
             document.getElementById('wifi-form').classList.add('active');
         }
     }
+
+        function selectNetwork(ssid){
+          if(ssid){
+            document.getElementById('ssid-input').value = ssid;
+          }
+        }
+
+        async function scanNetworks(){
+          const status = document.getElementById('scan-status');
+          const select = document.getElementById('network-select');
+          status.textContent = 'Scanning...';
+          select.innerHTML = '<option value="">Select a network (optional)</option>';
+          try{
+            const resp = await fetch('/scan');
+            if(!resp.ok){
+              throw new Error('Scan request failed');
+            }
+            const data = await resp.json();
+            if(!data.networks || data.networks.length === 0){
+              status.textContent = 'No networks found.';
+              return;
+            }
+            data.networks.forEach(net => {
+              const opt = document.createElement('option');
+              opt.value = net.ssid;
+              const lock = net.open ? '' : ' [LOCK]';
+              opt.textContent = net.ssid + lock + ' (' + net.rssi + ' dBm)';
+              select.appendChild(opt);
+            });
+            status.textContent = 'Found ' + data.networks.length + ' networks.';
+          } catch (err) {
+            status.textContent = 'Scan failed. Try again.';
+          }
+        }
     </script>
 </body>
 </html>
@@ -493,6 +561,45 @@ void handleRoot() {
   String page = String(portalHTML);
   page.replace("{{SERVER_URL}}", getServerBase());
   webServer.send(200, "text/html", page);
+}
+
+void handleScan() {
+  WiFi.mode(WIFI_AP_STA);
+  delay(100);
+
+  int n = WiFi.scanNetworks(false, true);
+  if (n < 0) {
+    webServer.send(500, "application/json", "{\"ok\":false,\"error\":\"scan failed\"}");
+    return;
+  }
+
+  String payload = "{\"ok\":true,\"networks\":[";
+  int added = 0;
+  const int maxNetworks = 12;
+
+  for (int i = 0; i < n && added < maxNetworks; ++i) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) {
+      continue;
+    }
+
+    if (added > 0) {
+      payload += ",";
+    }
+
+    payload += "{\"ssid\":\"";
+    payload += jsonEscape(ssid);
+    payload += "\",\"rssi\":";
+    payload += String(WiFi.RSSI(i));
+    payload += ",\"open\":";
+    payload += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "true" : "false";
+    payload += "}";
+    added++;
+  }
+
+  payload += "]}";
+  WiFi.scanDelete();
+  webServer.send(200, "application/json", payload);
 }
 
 void handleSave() {
@@ -578,7 +685,7 @@ void handleNotFound() {
 
 void startCaptivePortal() {
   out.println("[Starting Captive Portal]");
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASS);
 
   out.print("AP IP: ");
@@ -587,6 +694,7 @@ void startCaptivePortal() {
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
 
   webServer.on("/", handleRoot);
+  webServer.on("/scan", HTTP_GET, handleScan);
   webServer.on("/save", HTTP_POST, handleSave);
   webServer.onNotFound(handleNotFound);
   webServer.begin();
@@ -658,6 +766,284 @@ void tryAutoConnect() {
     }
   } else {
     out.println("No saved credentials. Use SETUP in calculator to configure WiFi.");
+  }
+}
+
+void handleSerialCommand(const String& cmdLine) {
+  String cmd = cmdLine;
+  cmd.trim();
+  if (cmd.length() == 0) {
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("HELP")) {
+    out.println("CLI: HELP | STATUS | AP | WIFI <ssid> <password> | RECONNECT | HEALTH | ASK <prompt> | SERVER <url> | CAMSTATUS | CAMOCR [N] | CAMSOLVE [N]");
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("CAMSTATUS")) {
+#ifdef CAMERA
+    out.print("[camera] ");
+    out.println(camera_sign ? "ready" : "not ready");
+#else
+    out.println("[camera] not compiled. Use camera firmware env.");
+#endif
+    return;
+  }
+
+  if (cmd.startsWith("CAMSOLVE")) {
+#ifdef CAMERA
+    if (!WiFi.isConnected()) {
+      out.println("[camsolve] NO WIFI");
+      return;
+    }
+
+    if (!camera_sign) {
+      out.println("[camsolve] camera not ready");
+      return;
+    }
+
+    String arg = cmd.substring(8);
+    arg.trim();
+    int questionNumber = arg.length() > 0 ? arg.toInt() : 0;
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) {
+      out.println("[camsolve] capture failed");
+      return;
+    }
+
+    out.print("[camsolve] captured bytes: ");
+    out.println((int)fb->len);
+
+    String url = getServerBase() + "/gpt/solve";
+    if (questionNumber > 0) {
+      url += "?n=" + String(questionNumber);
+    }
+
+    size_t answerLen = 0;
+    int reqStatus = postBinaryRequest(url, fb->buf, fb->len, "image/jpeg", response, MAXHTTPRESPONSELEN, &answerLen);
+    esp_camera_fb_return(fb);
+
+    if (reqStatus != 0) {
+      out.print("[camsolve] request failed: ");
+      out.println(reqStatus);
+      return;
+    }
+
+    out.print("[camsolve] ");
+    out.println(response);
+#else
+    out.println("[camsolve] camera not compiled. Use camera firmware env.");
+#endif
+    return;
+  }
+
+  if (cmd.startsWith("CAMOCR")) {
+#ifdef CAMERA
+    if (!WiFi.isConnected()) {
+      out.println("[camocr] NO WIFI");
+      return;
+    }
+
+    if (!camera_sign) {
+      out.println("[camocr] camera not ready");
+      return;
+    }
+
+    String arg = cmd.substring(6);
+    arg.trim();
+    int questionNumber = arg.length() > 0 ? arg.toInt() : 0;
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) {
+      out.println("[camocr] capture failed");
+      return;
+    }
+
+    out.print("[camocr] captured bytes: ");
+    out.println((int)fb->len);
+
+    String url = getServerBase() + "/gpt/ocr";
+    if (questionNumber > 0) {
+      url += "?n=" + String(questionNumber);
+    }
+
+    size_t ocrLen = 0;
+    int reqStatus = postBinaryRequest(url, fb->buf, fb->len, "image/jpeg", response, MAXHTTPRESPONSELEN, &ocrLen);
+    esp_camera_fb_return(fb);
+
+    if (reqStatus != 0) {
+      out.print("[camocr] request failed: ");
+      out.println(reqStatus);
+      return;
+    }
+
+    out.print("[camocr] ");
+    out.println(response);
+#else
+    out.println("[camocr] camera not compiled. Use camera firmware env.");
+#endif
+    return;
+  }
+
+  if (cmd.startsWith("WIFI ")) {
+    String payload = cmd.substring(5);
+    payload.trim();
+    int splitPos = payload.indexOf(' ');
+    if (splitPos <= 0 || splitPos >= (int)payload.length() - 1) {
+      out.println("[wifi] usage: WIFI <ssid> <password>");
+      return;
+    }
+
+    storedSSID = payload.substring(0, splitPos);
+    storedPass = payload.substring(splitPos + 1);
+    storedEapUser = "";
+
+    prefs.begin("wifi", false);
+    prefs.putString("ssid", storedSSID);
+    prefs.putString("pass", storedPass);
+    prefs.remove("eap_user");
+    prefs.end();
+
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(storedSSID.c_str(), storedPass.c_str());
+
+    out.print("[wifi] connecting to ");
+    out.println(storedSSID);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      attempts++;
+      out.print(".");
+    }
+    out.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      out.print("[wifi] connected, IP: ");
+      out.println(WiFi.localIP());
+    } else {
+      out.println("[wifi] failed to connect");
+    }
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("STATUS")) {
+    out.print("[portal] ");
+    out.println(portalActive ? "active" : "inactive");
+    out.print("[wifi] ");
+    out.println(WiFi.isConnected() ? "connected" : "disconnected");
+    if (WiFi.isConnected()) {
+      out.print("[ip] ");
+      out.println(WiFi.localIP());
+    }
+    out.print("[ssid] ");
+    out.println(storedSSID.length() > 0 ? storedSSID : "<none>");
+    out.print("[server] ");
+    out.println(getServerBase());
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("AP")) {
+    if (portalActive) {
+      out.println("[portal already active]");
+    } else {
+      startCaptivePortal();
+    }
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("RECONNECT")) {
+    tryAutoConnect();
+    return;
+  }
+
+  if (cmd.equalsIgnoreCase("HEALTH")) {
+    if (!WiFi.isConnected()) {
+      out.println("[health] NO WIFI");
+      return;
+    }
+    char healthResponse[256];
+    memset(healthResponse, 0, sizeof(healthResponse));
+    size_t responseLen = 0;
+    int reqStatus = makeRequest(getServerBase() + "/healthz", healthResponse, sizeof(healthResponse), &responseLen);
+    if (reqStatus != 0) {
+      out.print("[health] request failed: ");
+      out.println(reqStatus);
+      return;
+    }
+    out.print("[health] ");
+    out.println(healthResponse);
+    return;
+  }
+
+  if (cmd.startsWith("ASK ")) {
+    if (!WiFi.isConnected()) {
+      out.println("[ask] NO WIFI");
+      return;
+    }
+    String prompt = cmd.substring(4);
+    prompt.trim();
+    if (prompt.length() == 0) {
+      out.println("[ask] empty prompt");
+      return;
+    }
+
+    String url = getServerBase() + "/gpt/ask?question=" + urlEncode(prompt) + "&sid=terminal";
+    size_t realsize = 0;
+    if (makeRequest(url, response, MAXHTTPRESPONSELEN, &realsize)) {
+      out.println("[ask] request failed");
+      return;
+    }
+    out.print("[ask] ");
+    out.println(response);
+    return;
+  }
+
+  if (cmd.startsWith("SERVER ")) {
+    String input = cmd.substring(7);
+    input.trim();
+    if (input.length() == 0) {
+      out.println("[server] empty url");
+      return;
+    }
+
+    storedServerUrl = normalizeServerUrl(input);
+    prefs.begin("wifi", false);
+    prefs.putString("server_url", storedServerUrl);
+    prefs.end();
+
+    out.print("[server] updated to ");
+    out.println(storedServerUrl);
+    return;
+  }
+
+  out.print("[cli] unknown command: ");
+  out.println(cmd);
+  out.println("Type HELP");
+}
+
+void processSerialConsole() {
+  static String line;
+
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\r') {
+      continue;
+    }
+
+    if (c == '\n') {
+      handleSerialCommand(line);
+      line = "";
+      continue;
+    }
+
+    if (line.length() < 255) {
+      line += c;
+    }
   }
 }
 
@@ -782,9 +1168,16 @@ void setup() {
   // Load saved WiFi credentials
   loadSavedCredentials();
 
-  // Auto-connect to Suffield Gear (non-blocking)
-  WiFi.begin("Suffield Gear", "suffield");
-  out.println("[auto-connecting to Suffield Gear in background]");
+  if (storedSSID.length() == 0) {
+    out.println("[no saved WiFi; starting captive portal]");
+    startCaptivePortal();
+  } else {
+    tryAutoConnect();
+    if (!WiFi.isConnected()) {
+      out.println("[auto-connect failed; starting captive portal]");
+      startCaptivePortal();
+    }
+  }
 
   telnetServer.begin();
   telnetServer.setNoDelay(true);
@@ -805,11 +1198,18 @@ void enterDeepSleep() {
   WiFi.mode(WIFI_OFF);
 
   // Wake on GPIO3 (TIP) going LOW - TI link protocol starts by pulling line LOW
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  gpio_wakeup_enable(GPIO_NUM_3, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+#else
   esp_deep_sleep_enable_gpio_wakeup(1ULL << 3, ESP_GPIO_WAKEUP_GPIO_LOW);
+#endif
   esp_deep_sleep_start();
 }
 
 void loop() {
+  processSerialConsole();
+
   // Handle telnet connections
   if (telnetServer.hasClient()) {
     if (telnetClient && telnetClient.connected()) {
@@ -1078,6 +1478,53 @@ int makeRequest(String url, char* result, int resultLen, size_t* len) {
 
   http.end();
 
+  return 0;
+}
+
+int postBinaryRequest(String url, const uint8_t* payload, size_t payloadLen, const char* contentType, char* result, int resultLen, size_t* len) {
+  memset(result, 0, resultLen);
+
+#ifdef SECURE
+  WiFiClientSecure client;
+  client.setInsecure();
+#else
+  WiFiClient client;
+#endif
+  HTTPClient http;
+
+  out.println(url);
+  client.setTimeout(15000);
+  http.begin(client, url.c_str());
+  http.setTimeout(20000);
+  http.addHeader("Content-Type", contentType);
+  http.addHeader("ngrok-skip-browser-warning", "true");
+
+  int httpResponseCode = http.POST((uint8_t*)payload, payloadLen);
+  out.print(url);
+  out.print(" ");
+  out.println(httpResponseCode);
+
+  if (httpResponseCode != 200) {
+    String errBody = http.getString();
+    if (errBody.length() > 0) {
+      out.println(errBody);
+    }
+    http.end();
+    return httpResponseCode;
+  }
+
+  String body = http.getString();
+  size_t copyLen = min((size_t)(resultLen - 1), (size_t)body.length());
+  memcpy(result, body.c_str(), copyLen);
+  result[copyLen] = '\0';
+  if (len) {
+    *len = copyLen;
+  }
+
+  out.print("response size: ");
+  out.println((int)copyLen);
+
+  http.end();
   return 0;
 }
 

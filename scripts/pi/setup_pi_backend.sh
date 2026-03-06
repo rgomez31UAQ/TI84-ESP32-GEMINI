@@ -19,7 +19,7 @@ fi
 
 echo "[1/8] Installing system dependencies"
 apt-get update
-apt-get install -y git curl ca-certificates build-essential
+apt-get install -y git curl ca-certificates build-essential avahi-daemon
 
 echo "[2/8] Installing Node.js 20"
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v 2>/dev/null || true)" != v20* ]]; then
@@ -59,6 +59,8 @@ systemctl daemon-reload
 echo "[7/8] Enabling and starting service"
 systemctl enable ti84-backend.service
 systemctl restart ti84-backend.service
+systemctl enable avahi-daemon
+systemctl restart avahi-daemon
 
 echo "[8/8] Status"
 systemctl --no-pager --full status ti84-backend.service || true

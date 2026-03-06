@@ -16,9 +16,21 @@ const db = await JSONFilePreset("db.json", { conversations: {} });
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-2.0-flash";
 const VISION_MODEL = process.env.GEMINI_VISION_MODEL || "gemini-2.0-flash";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const OPENAI_VISION_MODEL = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.1-8b-instruct:free";
-const PROVIDER_ORDER = (process.env.AI_PROVIDER_ORDER || "gemini,groq,openrouter")
+const OPENROUTER_VISION_MODEL =
+  process.env.OPENROUTER_VISION_MODEL || "openrouter/free";
+const PROVIDER_ORDER = (process.env.AI_PROVIDER_ORDER || "gemini,groq,openrouter,openai")
+  .split(",")
+  .map((x) => x.trim().toLowerCase())
+  .filter(Boolean);
+const VISION_PROVIDER_ORDER = (process.env.VISION_PROVIDER_ORDER || "gemini,openrouter")
+  .split(",")
+  .map((x) => x.trim().toLowerCase())
+  .filter(Boolean);
+const OCR_PROVIDER_ORDER = (process.env.OCR_PROVIDER_ORDER || "gemini,openrouter,openai")
   .split(",")
   .map((x) => x.trim().toLowerCase())
   .filter(Boolean);
@@ -54,6 +66,12 @@ function mapAiError(err) {
   return "AI REQUEST FAILED. CHECK SERVER LOGS.";
 }
 
+function shouldRetryProvider(err) {
+  const status = err?.status || err?.cause?.status;
+  const body = String(err?.message || "");
+  return status === 429 || /rate limit|too many requests|retry/i.test(body);
+}
+
 function buildPrompt(question, isMath, history = []) {
   const systemPrompt = isMath
     ? "You are a precise math solver for a TI-84 calculator. Compute the exact answer. Use uppercase plain text only. Never use LaTeX, backslashes, or curly braces. Keep under 250 characters."
@@ -81,6 +99,9 @@ async function generateText(prompt, modelName = TEXT_MODEL) {
       }
       if (provider === "openrouter") {
         return await generateTextWithOpenRouter(prompt);
+      }
+      if (provider === "openai") {
+        return await generateTextWithOpenAI(prompt);
       }
     } catch (err) {
       failures.push(`${provider}: ${String(err?.message || err)}`);
@@ -178,7 +199,211 @@ async function generateTextWithOpenRouter(prompt) {
   return readOpenAICompatibleText(payload);
 }
 
-async function solveFromImage(question, imageBytes, mimeType = "image/jpeg") {
+async function generateTextWithOpenAI(prompt) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      max_tokens: 220,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OPENAI ${response.status}: ${body}`);
+  }
+
+  const payload = await response.json();
+  return readOpenAICompatibleText(payload);
+}
+
+function buildOcrPrompt(questionNumber = "") {
+  const q = String(questionNumber || "").trim();
+  const base =
+    "Extract the visible exercise text exactly from this image. " +
+    "Return plain uppercase text only, no markdown, no latex, no backslashes, no braces. " +
+    "If unreadable return ONLY: OCR FAILED.";
+
+  if (!q) {
+    return base;
+  }
+  return `${base} Focus on question number ${q} if multiple problems are present.`;
+}
+
+function buildSolveFromOcrPrompt(ocrText, questionNumber = "") {
+  const q = String(questionNumber || "").trim();
+  const target = q
+    ? `Solve question number ${q} from the OCR text.`
+    : "Solve the exercise from the OCR text.";
+
+  return (
+    "You are a precise math solver for TI-84 output. " +
+    "Compute the exact final answer. Return only final result in uppercase plain text under 100 characters. " +
+    "No markdown, no latex, no backslashes, no braces.\n\n" +
+    `${target}\n\nOCR TEXT:\n${ocrText}`
+  );
+}
+
+async function ocrFromImageWithGemini(imageBytes, mimeType = "image/jpeg", questionNumber = "") {
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error("GOOGLE_API_KEY is missing");
+  }
+
+  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+  const model = genAI.getGenerativeModel({ model: VISION_MODEL });
+
+  const result = await model.generateContent([
+    {
+      text: buildOcrPrompt(questionNumber),
+    },
+    {
+      inlineData: {
+        mimeType,
+        data: Buffer.from(imageBytes).toString("base64"),
+      },
+    },
+  ]);
+
+  return result.response.text() || "";
+}
+
+async function ocrFromImageWithOpenRouter(imageBytes, mimeType = "image/jpeg", questionNumber = "") {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is missing");
+  }
+
+  const dataUrl = `data:${mimeType};base64,${Buffer.from(imageBytes).toString("base64")}`;
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "https://github.com",
+      "X-Title": "TI84-ESP32-GEMINI",
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_VISION_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildOcrPrompt(questionNumber),
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: dataUrl,
+              },
+            },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 900,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OPENROUTER OCR ${response.status}: ${body}`);
+  }
+
+  const payload = await response.json();
+  return readOpenAICompatibleText(payload);
+}
+
+async function ocrFromImageWithOpenAI(imageBytes, mimeType = "image/jpeg", questionNumber = "") {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+
+  const dataUrl = `data:${mimeType};base64,${Buffer.from(imageBytes).toString("base64")}`;
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_VISION_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildOcrPrompt(questionNumber),
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: dataUrl,
+              },
+            },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 900,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OPENAI OCR ${response.status}: ${body}`);
+  }
+
+  const payload = await response.json();
+  return readOpenAICompatibleText(payload);
+}
+
+async function extractTextFromImage(imageBytes, mimeType = "image/jpeg", questionNumber = "") {
+  const failures = [];
+
+  for (const provider of OCR_PROVIDER_ORDER) {
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (provider === "gemini") {
+          return await ocrFromImageWithGemini(imageBytes, mimeType, questionNumber);
+        }
+        if (provider === "openrouter") {
+          return await ocrFromImageWithOpenRouter(imageBytes, mimeType, questionNumber);
+        }
+        if (provider === "openai") {
+          return await ocrFromImageWithOpenAI(imageBytes, mimeType, questionNumber);
+        }
+      } catch (err) {
+        const retryable = shouldRetryProvider(err) && attempt < maxAttempts;
+        console.error(`[OCR FAILOVER] ${provider} failed (attempt ${attempt})`, err);
+
+        if (retryable) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          continue;
+        }
+
+        failures.push(`${provider}: ${String(err?.message || err)}`);
+        break;
+      }
+    }
+  }
+
+  throw new Error(failures.join(" | ") || "No OCR provider configured");
+}
+
+async function solveFromImageWithGemini(question, imageBytes, mimeType = "image/jpeg") {
   if (!process.env.GOOGLE_API_KEY) {
     throw new Error("GOOGLE_API_KEY is missing");
   }
@@ -201,6 +426,75 @@ async function solveFromImage(question, imageBytes, mimeType = "image/jpeg") {
   ]);
 
   return result.response.text() || "";
+}
+
+async function solveFromImageWithOpenRouter(question, imageBytes, mimeType = "image/jpeg") {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is missing");
+  }
+
+  const dataUrl = `data:${mimeType};base64,${Buffer.from(imageBytes).toString("base64")}`;
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "https://github.com",
+      "X-Title": "TI84-ESP32-GEMINI",
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_VISION_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                `${question} Answer only with the final result, under 100 chars. ` +
+                "If multiple choice, return letter + answer. Use uppercase plain text.",
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: dataUrl,
+              },
+            },
+          ],
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 220,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OPENROUTER VISION ${response.status}: ${body}`);
+  }
+
+  const payload = await response.json();
+  return readOpenAICompatibleText(payload);
+}
+
+async function solveFromImage(question, imageBytes, mimeType = "image/jpeg") {
+  const failures = [];
+
+  for (const provider of VISION_PROVIDER_ORDER) {
+    try {
+      if (provider === "gemini") {
+        return await solveFromImageWithGemini(question, imageBytes, mimeType);
+      }
+      if (provider === "openrouter") {
+        return await solveFromImageWithOpenRouter(question, imageBytes, mimeType);
+      }
+    } catch (err) {
+      failures.push(`${provider}: ${String(err?.message || err)}`);
+      console.error(`[VISION FAILOVER] ${provider} failed`, err);
+    }
+  }
+
+  throw new Error(failures.join(" | ") || "No vision provider configured");
 }
 
 export async function chatgpt() {
@@ -288,7 +582,32 @@ export async function chatgpt() {
     res.send(`${page}/${totalPairs}|Q:${q} A:${a}`);
   });
 
-  // solve a math equation from an image.
+  routes.post("/ocr", async (req, res) => {
+    try {
+      const contentType = req.headers["content-type"] || "image/jpeg";
+      console.log("content-type:", contentType);
+
+      if (contentType !== "image/jpg" && contentType !== "image/jpeg") {
+        res.status(400);
+        res.send(`bad content-type: ${contentType}`);
+        return;
+      }
+
+      if (!req.body || !req.body.length) {
+        res.status(400).send("EMPTY IMAGE");
+        return;
+      }
+
+      const question_number = req.query.n;
+      const extracted = await extractTextFromImage(req.body, contentType, question_number);
+      res.send(sanitizeForTI(extracted, 250));
+    } catch (e) {
+      console.error(e);
+      res.send(sanitizeForTI(mapAiError(e), 120));
+    }
+  });
+
+  // solve a math equation from an image using OCR -> text solve.
   routes.post("/solve", async (req, res) => {
     try {
       const contentType = req.headers["content-type"] || "image/jpeg";
@@ -306,14 +625,24 @@ export async function chatgpt() {
       }
 
       const question_number = req.query.n;
+      const mode = String(req.query.mode || "solve").toLowerCase();
+      const extracted = sanitizeForTI(
+        await extractTextFromImage(req.body, contentType, question_number),
+        250
+      );
 
-      const question = question_number
-        ? `What is the answer to question ${question_number}?`
-        : "What is the answer to this question?";
+      if (mode === "ocr") {
+        res.send(extracted);
+        return;
+      }
 
-      console.log("prompt:", question);
+      if (extracted === "OCR FAILED" || extracted.length < 2) {
+        res.send("OCR FAILED. RETRY WITH BETTER LIGHT/FOCUS.");
+        return;
+      }
 
-      const answer = await solveFromImage(question, req.body, contentType);
+      const prompt = buildSolveFromOcrPrompt(extracted, question_number);
+      const answer = await generateText(prompt);
       res.send(sanitizeForTI(answer, 100));
     } catch (e) {
       console.error(e);
