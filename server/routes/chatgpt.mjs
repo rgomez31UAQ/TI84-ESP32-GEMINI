@@ -2,6 +2,15 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { JSONFilePreset } from "lowdb/node";
 import crypto from "crypto";
+import dot from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Ensure route-level constants read server/.env regardless of process cwd.
+dot.config({ path: path.resolve(__dirname, "../.env") });
 
 const db = await JSONFilePreset("db.json", { conversations: {} });
 const DAY_MS = 24 * 60 * 60 * 1000;
