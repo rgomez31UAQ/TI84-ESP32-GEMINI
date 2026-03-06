@@ -41,9 +41,12 @@ Este enfoque evita depender de una laptop encendida 24/7 y mantiene el proyecto 
 ## Firmware (ESP32)
 
 1. Ve a `firmware/platformio.ini` y ajusta tu placa si hace falta.
-1. El archivo ya trae 2 perfiles:
+1. Perfil por defecto actual: `xiao_esp32s3_local` (Seeed XIAO ESP32S3).
+1. El archivo incluye 4 perfiles:
 1. `xiao_esp32c3_local` (backend local)
-1. `xiao_esp32c3_cloud` (backend en Render con HTTPS)
+1. `xiao_esp32c3_cloud` (backend cloud con HTTPS)
+1. `xiao_esp32s3_local` (backend local)
+1. `xiao_esp32s3_cloud` (backend cloud con HTTPS)
 1. Compila y sube (ejemplo cloud):
 
 ```bash
@@ -58,11 +61,156 @@ cd firmware
 pio run -e xiao_esp32c3_local -t upload
 ```
 
-Cableado tipico (ajustar segun tu placa):
+Para XIAO ESP32S3 (recomendado en este repo):
 
-- TIP: GPIO configurado en `main.ino` (`TIP`)
-- RING: GPIO configurado en `main.ino` (`RING`)
-- SLEEVE: GND
+```bash
+cd firmware
+pio run -e xiao_esp32s3_local -t upload
+```
+
+Para pruebas de camara (OCR + solve por imagen):
+
+```bash
+cd firmware
+pio run -e xiao_esp32s3_camera_local -t upload
+```
+
+## Pruebas por terminal (sin calculadora)
+
+Si aun no conectas la TI-84, puedes validar ESP32 <-> backend desde serie.
+
+1. Abre monitor serie:
+
+```bash
+cd firmware
+pio device monitor -b 115200 --port /dev/ttyACM1
+```
+
+1. Comandos CLI disponibles en el ESP32:
+1. `HELP`
+1. `STATUS`
+1. `AP`
+1. `WIFI <ssid> <password>`
+1. `SERVER <url>` (ejemplo `SERVER http://192.168.1.50:8080`)
+1. `HEALTH`
+1. `ASK hola desde terminal`
+1. `CAMSTATUS`
+1. `CAMOCR 1`
+1. `CAMSOLVE 1`
+
+Flujo recomendado:
+
+1. `WIFI <ssid> <password>`
+1. `SERVER http://<IP_RASPBERRY>:8080`
+1. `HEALTH` (debe responder JSON con `"ok":true`)
+1. `ASK prueba desde esp32`
+
+Nota: si no hay credenciales guardadas o falla la conexion, el firmware levanta automaticamente el AP `calc`.
+
+## Integracion ESP32 + TI-84 (pruebas en pantalla)
+
+Esta seccion esta enfocada en conectar fisicamente la calculadora para validar respuestas directamente en pantalla TI-84.
+
+### Pinout usado en este firmware
+
+En este repo, el firmware define los pines de enlace en `firmware/src/main.ino`:
+
+- `TIP = D1`
+- `RING = D10`
+- `SLEEVE = GND`
+
+Mapa de conexion al jack 2.5mm TRS de la TI-84:
+
+| TI-84 link jack | ESP32 (este repo) | Nota |
+| --- | --- | --- |
+| Tip | `D1` | Linea de datos TI link |
+| Ring | `D10` | Linea de datos TI link |
+| Sleeve | `GND` | Tierra comun |
+
+Si no hay comunicacion, intercambia Tip y Ring.
+
+### Esquema rapido de cableado
+
+```text
+TI-84 2.5mm TRS jack             ESP32 (XIAO)
+----------------------           -----------------
+TIP   -------------------------> D1
+RING  -------------------------> D10
+SLEEVE-------------------------> GND
+```
+
+### Diagrama visual (pinout)
+
+![Pinout TI-84 a ESP32](docs/hardware/ti84-esp32-pinout.svg)
+
+### Pasos de conexion recomendados
+
+1. Usa un conector TRS 2.5mm (el de la TI-84) con tres conductores.
+1. Conecta `SLEEVE` primero a `GND` del ESP32.
+1. Conecta `TIP` y `RING` a `D1` y `D10` respectivamente.
+1. Flashea firmware y prueba con la calculadora.
+1. Si falla la deteccion de enlace, intercambia `TIP` y `RING`.
+
+### Referencia de pines de otros proyectos
+
+En `TI-GPT`, el ejemplo de cableado usa `GPIO22` y `GPIO23`.
+
+En este repositorio integrado se usa `D1`/`D10` por compatibilidad con la configuracion actual de `main.ino`.
+
+## Esquemas e imagenes de PCB (importadas)
+
+Se importo el diseno de referencia desde `TI-84-GPT-HACK/pcb` a:
+
+- `docs/hardware/ti84-gpt-hack-pcb/schematic.png`
+- `docs/hardware/ti84-gpt-hack-pcb/built.png`
+- `docs/hardware/ti84-gpt-hack-pcb/outline.svg`
+- `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_pcb`
+- `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch`
+
+Vista de esquematico:
+
+![Schematic TI-84 GPT Hack](docs/hardware/ti84-gpt-hack-pcb/schematic.png)
+
+Vista de PCB ensamblada:
+
+![PCB built TI-84 GPT Hack](docs/hardware/ti84-gpt-hack-pcb/built.png)
+
+Para abrir y editar el diseno de PCB, usa KiCad con:
+
+- `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch`
+- `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_pcb`
+
+## BOM minimo (armado)
+
+### Opcion A: cableado directo (sin PCB)
+
+| Cantidad | Componente | Nota |
+| --- | --- | --- |
+| 1 | Seeed XIAO ESP32S3 | Recomendado en este repo |
+| 1 | Conector 2.5mm TRS macho o cable TI link cortado | Para TIP/RING/SLEEVE |
+| 3 | Cables jumper o cable siliconado | TIP, RING y GND |
+| 1 | Fuente USB 5V (o bateria USB) | Alimentacion del ESP32 |
+
+Conexion directa:
+
+- `TIP -> D1`
+- `RING -> D10`
+- `SLEEVE -> GND`
+
+### Opcion B: PCB de referencia importada (TI-84-GPT-HACK)
+
+| Ref | Cantidad | Componente (schematic importado) | Archivo fuente |
+| --- | --- | --- | --- |
+| U1 | 1 | `MOUDLE-SEEEDUINO-XIAO-ESP32C3` | `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch` |
+| Q1, Q2 | 2 | `MMBF170` | `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch` |
+| R1, R2, R3, R4 | 4 | `R` (valor no especificado en el schematic importado) | `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch` |
+| J1 | 1 | `Conn_01x04` | `docs/hardware/ti84-gpt-hack-pcb/cheating-calc.kicad_sch` |
+
+Notas importantes:
+
+- La PCB importada es una referencia de hardware del proyecto `TI-84-GPT-HACK`.
+- El firmware de este repo esta ajustado para `XIAO ESP32S3` y pines `D1/D10`.
+- Si fabricas PCB, verifica pin mapping y valores de resistencias antes de mandar a produccion.
 
 ## Servidor (Multi-IA)
 
@@ -87,14 +235,19 @@ El firmware consulta estas rutas:
 
 - `GET /gpt/ask`
 - `GET /gpt/history`
-- `POST /gpt/solve` (vision/camara)
+- `POST /gpt/ocr` (extraer texto OCR desde imagen)
+- `POST /gpt/solve` (OCR -> texto -> solucion con IA)
 
 ### Variables clave de `.env`
 
-- `AI_PROVIDER_ORDER=gemini,groq,openrouter`
+- `AI_PROVIDER_ORDER=openai,groq,openrouter,gemini`
 - `GOOGLE_API_KEY=...`
 - `GROQ_API_KEY=...` (opcional)
 - `OPENROUTER_API_KEY=...` (opcional)
+- `OPENAI_API_KEY=...` (opcional, ChatGPT)
+- `VISION_PROVIDER_ORDER=openai,openrouter,gemini`
+- `OCR_PROVIDER_ORDER=openai,openrouter,gemini`
+- `OPENROUTER_VISION_MODEL=openrouter/free` (fallback de vision)
 
 ## Despliegue en nube
 
@@ -171,7 +324,18 @@ Scripts incluidos:
 - `scripts/pi/setup_pi_backend.sh`
 - `scripts/pi/update_pi_backend.sh`
 - `scripts/pi/install_tailscale.sh`
+- `scripts/pi/configure_pi_wifi.sh`
 - `scripts/pi/ti84-backend.service`
+
+Para mantener la Raspberry conectada al cambiar entre modem y hotspot:
+
+```bash
+cd /opt/TI84-ESP32-GEMINI
+sudo bash scripts/pi/configure_pi_wifi.sh add "MiModemCasa" "clave_modem" 90
+sudo bash scripts/pi/configure_pi_wifi.sh add "MiHotspot" "clave_hotspot" 70
+```
+
+Usa `http://ti84pi.local:8080` como Backend URL para evitar depender de IP fija.
 
 ## Publicar en GitHub (manual)
 
@@ -192,7 +356,9 @@ Si Git pide autenticacion por HTTPS, usa un token personal (PAT) con permisos de
 
 1. El ESP32 puede crear AP (`calc`) para configuracion inicial.
 1. Desde ese portal puedes conectarlo a WiFi normal o hotspot de telefono.
+1. El portal incluye boton `Scan Nearby WiFi` para listar SSIDs cercanos y autocompletar el nombre de red.
 1. Desde ese mismo portal puedes definir la URL del backend (Render/Railway) sin recompilar firmware.
+1. Para Raspberry local, usa `http://ti84pi.local:8080` como URL estable aun cuando cambie la IP.
 1. Para movilidad, hotspot del telefono es la opcion mas practica.
 1. Para uso continuo, WiFi fijo + backend en nube es la opcion mas estable.
 

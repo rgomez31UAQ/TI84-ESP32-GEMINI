@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">TI-84 to ESP32 Pinout</title>
+  <desc id="desc">Wiring map from TI-84 2.5mm TRS link port to XIAO ESP32 pins used by this firmware.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #f7f9fc; }
+      .panel { fill: #ffffff; stroke: #1f2937; stroke-width: 2; }
+      .title { font: 700 28px 'DejaVu Sans', sans-serif; fill: #111827; }
+      .subtitle { font: 500 16px 'DejaVu Sans', sans-serif; fill: #374151; }
+      .label { font: 700 18px 'DejaVu Sans', sans-serif; fill: #111827; }
+      .text { font: 500 16px 'DejaVu Sans', sans-serif; fill: #1f2937; }
+      .small { font: 500 14px 'DejaVu Sans', sans-serif; fill: #4b5563; }
+      .tip { stroke: #ef4444; fill: #ef4444; }
+      .ring { stroke: #f59e0b; fill: #f59e0b; }
+      .sleeve { stroke: #2563eb; fill: #2563eb; }
+      .wire { stroke-width: 4; fill: none; }
+      .pinBox { fill: #f3f4f6; stroke: #6b7280; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="620"/>
+  <text class="title" x="50" y="55">Pinout TI-84 Link Port to ESP32 (Firmware Actual)</text>
+  <text class="subtitle" x="50" y="85">Referencia rapida para pruebas en pantalla con TI-84.</text>
+
+  <rect class="panel" x="50" y="120" width="450" height="420" rx="12"/>
+  <text class="label" x="80" y="165">TI-84 Link Port (2.5mm TRS)</text>
+
+  <circle class="tip" cx="145" cy="245" r="12"/>
+  <text class="text" x="180" y="251">TIP (linea de datos)</text>
+
+  <circle class="ring" cx="145" cy="315" r="12"/>
+  <text class="text" x="180" y="321">RING (linea de datos)</text>
+
+  <circle class="sleeve" cx="145" cy="385" r="12"/>
+  <text class="text" x="180" y="391">SLEEVE (GND)</text>
+
+  <rect class="panel" x="700" y="120" width="450" height="420" rx="12"/>
+  <text class="label" x="730" y="165">ESP32 (XIAO) - Pines usados</text>
+
+  <rect class="pinBox" x="760" y="220" width="320" height="44" rx="8"/>
+  <text class="text" x="780" y="248">D1   (TIP)</text>
+
+  <rect class="pinBox" x="760" y="290" width="320" height="44" rx="8"/>
+  <text class="text" x="780" y="318">D10  (RING)</text>
+
+  <rect class="pinBox" x="760" y="360" width="320" height="44" rx="8"/>
+  <text class="text" x="780" y="388">GND  (SLEEVE)</text>
+
+  <path class="wire tip" d="M157 245 C340 245, 560 242, 760 242"/>
+  <path class="wire ring" d="M157 315 C340 315, 560 312, 760 312"/>
+  <path class="wire sleeve" d="M157 385 C340 385, 560 382, 760 382"/>
+
+  <text class="small" x="50" y="580">Nota: Si no hay comunicacion, intercambia TIP y RING.</text>
+  <text class="small" x="700" y="580">Fuente de pines: firmware/src/main.ino (TIP=D1, RING=D10, SLEEVE=GND).</text>
+</svg>

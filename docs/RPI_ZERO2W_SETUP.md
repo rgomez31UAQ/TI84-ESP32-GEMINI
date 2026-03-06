@@ -50,6 +50,7 @@ sudo bash scripts/pi/setup_pi_backend.sh
 This will:
 
 - Install Node.js 20
+- Install and enable mDNS (`avahi-daemon`) for `ti84pi.local`
 - Deploy code to `/opt/TI84-ESP32-GEMINI`
 - Install systemd service `ti84-backend.service`
 - Create `/etc/ti84-backend.env`
@@ -97,9 +98,28 @@ Expected:
 In ESP32 captive portal (`calc` AP):
 
 - Set WiFi credentials
-- Set Backend URL to Pi URL, for example:
+- Set Backend URL to Pi URL (recommended):
 - `http://ti84pi.local:8080`
-- or `http://192.168.1.50:8080`
+
+Using `ti84pi.local` avoids changing the URL when IP changes between modem/hotspot.
+
+## 7. Keep Raspberry Connected (Modem + Hotspot)
+
+Add multiple WiFi profiles with priorities:
+
+```bash
+cd /opt/TI84-ESP32-GEMINI
+sudo bash scripts/pi/configure_pi_wifi.sh add "MiModemCasa" "clave_modem" 90
+sudo bash scripts/pi/configure_pi_wifi.sh add "MiHotspot" "clave_hotspot" 70
+sudo bash scripts/pi/configure_pi_wifi.sh list
+sudo bash scripts/pi/configure_pi_wifi.sh status
+```
+
+Notes:
+
+- Higher priority connects first if both are available.
+- If modem is down, Pi can connect to hotspot automatically.
+- ESP32 and Raspberry must be clients of the same network (same hotspot or same modem) to communicate.
 
 ## Optional: Remote Access Without Port Forwarding
 
@@ -127,5 +147,5 @@ sudo bash scripts/pi/update_pi_backend.sh
 Pi Zero 2 W has a single onboard WiFi.
 
 - Client mode only (recommended): stable.
-- AP + client at same time: possible but less stable.
-- Best reliability for AP+internet: add USB WiFi dongle.
+- For this project, Raspberry does not need AP mode because ESP32 already provides AP `calc` for setup.
+- Keep Raspberry in client mode and connect both devices to same modem/hotspot.
