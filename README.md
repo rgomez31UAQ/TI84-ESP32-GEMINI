@@ -40,13 +40,22 @@ Este enfoque evita depender de una laptop encendida 24/7 y mantiene el proyecto 
 
 ## Firmware (ESP32)
 
-1. Ve a `firmware/platformio.ini` y elige/ajusta tu placa.
-2. Si tu servidor no esta en `http://192.168.1.100:8080`, define `SERVER` en `build_flags`.
-3. Compila y sube:
+1. Ve a `firmware/platformio.ini` y ajusta tu placa si hace falta.
+1. El archivo ya trae 2 perfiles:
+1. `xiao_esp32c3_local` (backend local)
+1. `xiao_esp32c3_cloud` (backend en Render con HTTPS)
+1. Compila y sube (ejemplo cloud):
 
 ```bash
 cd firmware
-pio run -t upload
+pio run -e xiao_esp32c3_cloud -t upload
+```
+
+Para local:
+
+```bash
+cd firmware
+pio run -e xiao_esp32c3_local -t upload
 ```
 
 Cableado tipico (ajustar segun tu placa):
@@ -100,6 +109,8 @@ El firmware consulta estas rutas:
 1. Health Check Path: `/healthz`
 1. Variables de entorno: copia las de `.env.example`.
 1. Despliega y copia la URL HTTPS publica.
+
+Si ya tienes cuenta Render con GitHub conectada, este flujo suele tardar solo unos minutos.
 
 Luego, en `firmware/platformio.ini`, define por ejemplo:
 
