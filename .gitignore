@@ -1,0 +1,14 @@
+# Node
+server/node_modules/
+server/.env
+server/npm-debug.log*
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+.vscode/

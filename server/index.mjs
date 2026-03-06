@@ -1,0 +1,59 @@
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import morgan from "morgan";
+import dot from "dotenv";
+import { chatgpt } from "./routes/chatgpt.mjs";
+import { images } from "./routes/images.mjs";
+import { programs } from "./routes/programs.mjs";
+
+import { firmware } from "./routes/firmware.mjs";
+import { logs } from "./routes/logs.mjs";
+dot.config();
+
+async function main() {
+  const port = +(process.env.PORT ?? 8080);
+  if (!port || !Number.isInteger(port)) {
+    console.error("bad port");
+    process.exit(1);
+  }
+
+  const app = express();
+  app.use(morgan("dev"));
+  app.use(cors("*"));
+  app.use(
+    bodyParser.raw({
+      type: ["image/jpg", "image/jpeg"],
+      limit: "10mb",
+    })
+  );
+  app.use((req, res, next) => {
+    console.log(req.headers.authorization);
+    next();
+  });
+
+  app.get("/healthz", (_req, res) => {
+    res.status(200).json({ ok: true, service: "ti84-esp32-gemini-server" });
+  });
+
+  // Programs
+  app.use("/programs", programs());
+
+  // ChatGPT
+  app.use("/gpt", await chatgpt());
+
+  // Images
+  app.use("/image", images());
+
+  // Firmware OTA updates
+  app.use("/firmware", firmware());
+
+  // Remote serial monitor
+  app.use("/logs", logs());
+
+  app.listen(port, () => {
+    console.log(`listening on ${port}`);
+  });
+}
+
+main();
