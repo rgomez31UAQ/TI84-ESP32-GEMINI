@@ -126,6 +126,21 @@ build_flags = -D SERVER=\"https://tu-app.onrender.com\" -D SECURE
 
 `server/Dockerfile` y `server/.dockerignore` estan incluidos para despliegue en cualquier proveedor con contenedores.
 
+## Publicar en GitHub (manual)
+
+Repositorio remoto configurado:
+
+- `origin = https://github.com/rgomez31UAQ/TI84-ESP32-GEMINI.git`
+
+Si el repo aun no existe, crealo en GitHub con ese nombre y luego ejecuta:
+
+```bash
+cd TI84-ESP32-GEMINI
+git push -u origin main
+```
+
+Si Git pide autenticacion por HTTPS, usa un token personal (PAT) con permisos de `repo`.
+
 ## Red para el ESP32
 
 1. El ESP32 puede crear AP (`calc`) para configuracion inicial.
