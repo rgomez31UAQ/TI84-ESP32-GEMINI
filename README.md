@@ -145,8 +145,15 @@ Si Git pide autenticacion por HTTPS, usa un token personal (PAT) con permisos de
 
 1. El ESP32 puede crear AP (`calc`) para configuracion inicial.
 1. Desde ese portal puedes conectarlo a WiFi normal o hotspot de telefono.
+1. Desde ese mismo portal puedes definir la URL del backend (Render/Railway) sin recompilar firmware.
 1. Para movilidad, hotspot del telefono es la opcion mas practica.
 1. Para uso continuo, WiFi fijo + backend en nube es la opcion mas estable.
+
+### Seguridad recomendada
+
+1. No guardes API keys de IA en el ESP32: deben quedarse solo en el backend de nube.
+1. En el portal AP configura solo `WiFi` y `Backend URL`.
+1. Rota tus keys (GitHub/Gemini/Groq/OpenRouter) si las compartes en texto plano.
 
 ## Siguiente paso operativo
 
